@@ -3,6 +3,7 @@ import os
 import datetime
 from dotenv import load_dotenv
 from discord.ext import commands
+from keep_alive import keep_alive
 
 load_dotenv()
 
@@ -65,4 +66,5 @@ async def banguy(interaction: discord.Interaction, member: discord.Member):
 async def youtube(interaction: discord.Interaction):
     await interaction.response.send_message("Voici le lien de ma chaine : https://www.youtube.com/@Gravenilvectuto")
 
+keep_alive() # Cela lance le serveur Flask
 bot.run(os.getenv('DISCORD_TOKEN'))
