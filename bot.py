@@ -48,8 +48,8 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member):
-    # ID du salon de bienvenue
-    channel = bot.get_channel(1333441520732209225) 
+    # Nouvel ID du salon de bienvenue
+    channel = bot.get_channel(1453864716911771779) 
     if channel:
         embed = discord.Embed(
             title="👋 Bienvenue !",
@@ -57,11 +57,8 @@ async def on_member_join(member):
             color=discord.Color.green(),
             timestamp=datetime.datetime.now()
         )
-        # On ajoute la photo de profil du membre
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text=f"Membre #{member.guild.member_count}")
-        
-        # Envoi du message avec le ping
         await channel.send(content=f"Bienvenue {member.mention} !", embed=embed)
 
 @bot.event
@@ -73,15 +70,31 @@ async def on_message(message: discord.Message):
 
 # --- 3. COMMANDES SLASH ---
 
+@bot.tree.command(name="test_bienvenue", description="Simule une arrivée pour tester le salon de bienvenue")
+async def test_bienvenue(interaction: discord.Interaction):
+    channel = bot.get_channel(1453864716911771779)
+    if channel:
+        embed = discord.Embed(
+            title="👋 Test de Bienvenue !",
+            description=f"Ceci est un test. Bienvenue {interaction.user.mention} !",
+            color=discord.Color.blue(),
+            timestamp=datetime.datetime.now()
+        )
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.set_footer(text=f"Test • Membre #{interaction.guild.member_count}")
+        
+        await channel.send(content=f"Test réussi pour {interaction.user.mention} !", embed=embed)
+        await interaction.response.send_message(f"Test envoyé dans <#1453864716911771779>", ephemeral=True)
+    else:
+        await interaction.response.send_message("Erreur : Salon introuvable.", ephemeral=True)
+
 @bot.tree.command(name="catalogue", description="Affiche le catalogue de films")
 async def catalogue(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🎬 Catalogue Films",
         description="Notre catalogue contient actuellement **18,906** films.\n"
                     "📺 **Catalogue Séries**\n"
-                    "Notre catalogue contient actuellement **6,739** séries,\n"
-                    "réparties sur **6,777** saisons, **72,569** épisodes uniques !\n\n"
-                    "🔗 Il y a un total de **90,924** liens disponibles.",
+                    "Notre catalogue contient actuellement **6,739** séries.",
         color=discord.Color.from_rgb(43, 45, 49)
     )
     embed.set_image(url="https://media.discordapp.net/attachments/1453864717897699379/1454074612815102148/Pathe_Logo.svg.png?format=webp&quality=lossless&width=1124&height=850")
@@ -96,10 +109,8 @@ async def warnguy(interaction: discord.Interaction, member: discord.Member):
 @bot.tree.command(name="banguy", description="Bannir une personne")
 async def banguy(interaction: discord.Interaction, member: discord.Member):
     await interaction.response.send_message("Ban envoyé !")
-    try: 
-        await member.send("Tu as été banni")
-    except: 
-        pass
+    try: await member.send("Tu as été banni")
+    except: pass
     await member.ban(reason="Tu n'es pas abonné")
 
 @bot.tree.command(name="youtube", description="Affiche ma chaine youtube")
