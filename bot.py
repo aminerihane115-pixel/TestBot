@@ -10,7 +10,7 @@ load_dotenv()
 # Configuration du bot
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 
-# --- 1. CLASSE POUR LES BOUTONS (DOIT ÊTRE PLACÉE ICI) ---
+# --- 1. CLASSE POUR LES BOUTONS ---
 class CatalogueButtons(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -36,6 +36,7 @@ class CatalogueButtons(discord.ui.View):
         await interaction.response.send_message("Votre demande a été transmise aux administrateurs.", ephemeral=True)
 
 # --- 2. ÉVÉNEMENTS ---
+
 @bot.event
 async def on_ready():
     print(f"Bot allumé : {bot.user}")
@@ -46,14 +47,28 @@ async def on_ready():
         print(e)
 
 @bot.event
+async def on_member_join(member):
+    # ID du salon de bienvenue
+    channel = bot.get_channel(1333441520732209225) 
+    if channel:
+        embed = discord.Embed(
+            title="👋 Bienvenue !",
+            description=f"Bienvenue {member.mention} sur le serveur !\nOn est ravi de te voir ici.",
+            color=discord.Color.green(),
+            timestamp=datetime.datetime.now()
+        )
+        # On ajoute la photo de profil du membre
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Membre #{member.guild.member_count}")
+        
+        # Envoi du message avec le ping
+        await channel.send(content=f"Bienvenue {member.mention} !", embed=embed)
+
+@bot.event
 async def on_message(message: discord.Message):
     if message.author.bot: return
     if message.content.lower() == 'bonjour':
         await message.author.send("Comment tu vas ?")
-    if message.content.lower() == "bienvenue":
-        welcome_channel = bot.get_channel(1333441520732209225)
-        if welcome_channel:
-            await welcome_channel.send("Bienvenue sur le discord")
     await bot.process_commands(message)
 
 # --- 3. COMMANDES SLASH ---
@@ -69,11 +84,8 @@ async def catalogue(interaction: discord.Interaction):
                     "🔗 Il y a un total de **90,924** liens disponibles.",
         color=discord.Color.from_rgb(43, 45, 49)
     )
-    # Image Pathé
     embed.set_image(url="https://media.discordapp.net/attachments/1453864717897699379/1454074612815102148/Pathe_Logo.svg.png?format=webp&quality=lossless&width=1124&height=850")
     embed.set_footer(text=f"Pathé Bot • {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    
-    # On envoie l'embed avec les boutons
     await interaction.response.send_message(embed=embed, view=CatalogueButtons())
 
 @bot.tree.command(name="warnguy", description="Alerter une personne")
@@ -95,5 +107,5 @@ async def youtube(interaction: discord.Interaction):
     await interaction.response.send_message("Voici le lien : https://www.youtube.com/@Gravenilvectuto")
 
 # --- 4. LANCEMENT ---
-keep_alive() # Indispensable pour Render
+keep_alive()
 bot.run(os.getenv('DISCORD_TOKEN'))
