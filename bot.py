@@ -18,7 +18,7 @@ DB_FILE = "db_links.json"
 SUGGESTION_CHANNEL_ID = 1453864717897699382
 ROLE_MODO_ID = 1453864714915287102
 
-# --- GESTION DB (Sauvegarde des liens & Bannissements) ---
+# --- GESTION DB ---
 def load_db():
     if not os.path.exists(DB_FILE): return {}
     with open(DB_FILE, "r") as f:
@@ -32,24 +32,16 @@ def is_banned(user_id):
     db = load_db()
     return str(user_id) in db.get("banned_users", [])
 
-# --- FONCTIONS TMDB (CORRIGÉES) ---
-# J'ai remis les deux fonctions séparées pour éviter le bug de recherche
-
+# --- FONCTIONS TMDB ---
 def search_tmdb(query):
-    """Recherche fiable sur TMDB"""
     url = f"https://api.themoviedb.org/3/search/multi"
-    params = {
-        'api_key': TMDB_API_KEY,
-        'query': query,
-        'language': 'fr-FR'
-    }
+    params = {'api_key': TMDB_API_KEY, 'query': query, 'language': 'fr-FR'}
     try:
         return requests.get(url, params=params).json().get('results', [])
     except:
         return []
 
 def get_details(endpoint):
-    """Récupère les détails (infos films, saisons, épisodes)"""
     url = f"https://api.themoviedb.org/3/{endpoint}"
     params = {'api_key': TMDB_API_KEY, 'language': 'fr-FR'}
     return requests.get(url, params=params).json()
@@ -94,22 +86,21 @@ class RejectReasonModal(discord.ui.Modal, title="Raison du refus"):
 # --- NAVIGATION SÉRIES ---
 class EpisodeSelect(discord.ui.Select):
     def __init__(self, serie_id, s_num, episodes):
-        # On limite à 25 épisodes max pour Discord
         options = [discord.SelectOption(label=f"E{e['episode_number']} - {e['name'][:50]}", value=f"{serie_id}|{s_num}|{e['episode_number']}") for e in episodes[:25]]
         super().__init__(placeholder="Choisis l'épisode...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
         s_id, s_num, e_num = self.values[0].split('|')
-        
-        # --- C'EST ICI QUE JE VÉRIFIE LES LIENS SÉRIES DANS TA DB ---
         db = load_db()
-        cle = f"{s_id}_S{s_num}_E{e_num}" # Format : ID_S1_E1
+        cle = f"{s_id}_S{s_num}_E{e_num}" 
         lien = db.get(cle)
         
         view = discord.ui.View()
         if lien:
             view.add_item(discord.ui.Button(label="▶️ Regarder", url=lien, style=discord.ButtonStyle.link))
         else:
+            # AJOUT : Bouton Bientôt disponible + Bouton Suggestion
+            view.add_item(discord.ui.Button(label="⌛ Bientôt disponible", disabled=True, style=discord.ButtonStyle.secondary))
             btn = discord.ui.Button(label="Faire une suggestion", style=discord.ButtonStyle.primary)
             async def suggest_callback(i):
                 chan = bot.get_channel(SUGGESTION_CHANNEL_ID)
@@ -137,8 +128,6 @@ class SearchModal(discord.ui.Modal, title="🎬 Recherche Pathé"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
-        # J'utilise la fonction corrigée ici
         results = search_tmdb(self.recherche.value)
         
         options = []
@@ -156,34 +145,31 @@ class SearchModal(discord.ui.Modal, title="🎬 Recherche Pathé"):
         async def sel_callback(inter):
             m_type, m_id = select.values[0].split('|')
             info = get_details(f"{m_type}/{m_id}")
-            
             titre = info.get('title') or info.get('name')
             desc = info.get('overview', 'Pas de résumé.')[:500]
             img = f"https://image.tmdb.org/t/p/w500{info['poster_path']}" if info.get('poster_path') else None
 
             embed = discord.Embed(title=f"🎬 {titre}", description=desc, color=0x2b2d31)
             if img: embed.set_image(url=img)
-            embed.set_footer(text=f"ID TMDB : {m_id}") # C'est cet ID qu'il faut utiliser pour lier
+            embed.set_footer(text=f"ID TMDB : {m_id}")
 
             view = discord.ui.View()
-            
             if m_type == 'movie':
-                # --- C'EST ICI QUE JE VÉRIFIE LES LIENS FILMS DANS TA DB ---
                 db = load_db()
-                lien = db.get(str(m_id)) # Vérifie si l'ID est dans db_links.json
-                
+                lien = db.get(str(m_id))
                 if lien:
                     view.add_item(discord.ui.Button(label="▶️ Regarder le film", url=lien, style=discord.ButtonStyle.link))
                 else:
-                    btn = discord.ui.Button(label="Faire une suggestion", style=discord.ButtonStyle.primary)
+                    # AJOUT : Bouton Bientôt disponible + Bouton Suggestion pour FILMS
+                    view.add_item(discord.ui.Button(label="⌛ Bientôt disponible", disabled=True, style=discord.ButtonStyle.secondary))
+                    btn_s = discord.ui.Button(label="Faire une suggestion", style=discord.ButtonStyle.primary)
                     async def suggest_callback(i):
                         chan = bot.get_channel(SUGGESTION_CHANNEL_ID)
                         await chan.send(f"📥 **Suggestion Film** : {titre} par {i.user.mention}", view=SuggestionView(i.user.id, titre))
                         await i.response.send_message("✅ Demande envoyée au staff !", ephemeral=True)
-                    btn.callback = suggest_callback
-                    view.add_item(btn)
+                    btn_s.callback = suggest_callback
+                    view.add_item(btn_s)
             else:
-                # C'est une série, on affiche les saisons
                 view.add_item(SaisonSelect(m_id, info.get('seasons', [])))
 
             await inter.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -210,14 +196,10 @@ async def add_link(interaction: discord.Interaction, tmdb_id: str, lien: str):
 @bot.tree.command(name="ban", description="Bannir du serveur + Bot")
 async def ban(interaction: discord.Interaction, membre: discord.Member, raison: str = "Banni via Bot"):
     if not interaction.user.guild_permissions.administrator: return
-    
-    # 1. Bot Blacklist
     db = load_db()
     bans = db.get("banned_users", [])
     if str(membre.id) not in bans: bans.append(str(membre.id))
     db["banned_users"] = bans; save_db(db)
-
-    # 2. Discord Ban
     try: await membre.ban(reason=raison); msg = "🚫 Banni du serveur et du bot."
     except: msg = "⚠️ Blacklisté du bot, mais échec ban serveur."
     await interaction.response.send_message(msg)
@@ -225,13 +207,9 @@ async def ban(interaction: discord.Interaction, membre: discord.Member, raison: 
 @bot.tree.command(name="unban", description="Débannir du serveur + Bot (via ID)")
 async def unban(interaction: discord.Interaction, user_id: str):
     if not interaction.user.guild_permissions.administrator: return
-    
-    # 1. Bot Unblacklist
     db = load_db()
     bans = db.get("banned_users", [])
     if user_id in bans: bans.remove(user_id); db["banned_users"] = bans; save_db(db)
-    
-    # 2. Discord Unban
     try: await interaction.guild.unban(discord.Object(id=int(user_id)))
     except: pass
     await interaction.response.send_message(f"✅ Utilisateur {user_id} débanni partout.")
