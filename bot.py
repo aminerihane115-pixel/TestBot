@@ -2,169 +2,211 @@ import discord
 import os
 import datetime
 import requests
-import json  # Ajouté pour gérer la base de données
+import json
 from dotenv import load_dotenv
 from discord.ext import commands
 from keep_alive import keep_alive
 
 load_dotenv()
 
-# Configuration du bot
+# --- CONFIGURATION ---
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
-
-# Récupération de ta clé TMDB
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 DB_FILE = "db_links.json"
 
-# --- FONCTION GESTION DB ---
+# Tes IDs fournis
+SUGGESTION_CHANNEL_ID = 1453864717897699382
+ROLE_MODO_ID = 1453864714915287102
+
+# --- GESTION DB ---
 def load_db():
-    if not os.path.exists(DB_FILE):
-        return {}
+    if not os.path.exists(DB_FILE): return {}
     with open(DB_FILE, "r") as f:
-        try:
-            return json.load(f)
-        except:
-            return {}
+        try: return json.load(f)
+        except: return {}
 
 def save_db(db):
-    with open(DB_FILE, "w") as f:
-        json.dump(db, f, indent=4)
+    with open(DB_FILE, "w") as f: json.dump(db, f, indent=4)
 
-# --- FONCTIONS TMDB ---
+def is_banned(user_id):
+    db = load_db()
+    return str(user_id) in db.get("banned_users", [])
 
-def search_tmdb(query):
-    """Cherche un film ou une série sur TMDB"""
-    if not TMDB_API_KEY:
-        print("Erreur : TMDB_API_KEY manquante dans l'environnement !")
-        return []
-    url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={query}&language=fr-FR"
-    try:
-        response = requests.get(url).json()
-        return response.get('results', [])
-    except Exception as e:
-        print(f"Erreur lors de la recherche : {e}")
-        return []
-
-def get_details(item_id, media_type):
-    """Récupère les détails complets"""
-    url = f"https://api.themoviedb.org/3/{media_type}/{item_id}?api_key={TMDB_API_KEY}&language=fr-FR"
+def get_tmdb(endpoint):
+    url = f"https://api.themoviedb.org/3/{endpoint}?api_key={TMDB_API_KEY}&language=fr-FR"
     return requests.get(url).json()
 
-# --- 1. SYSTÈME DE RECHERCHE (MODAL & SELECT) ---
+# --- SYSTÈME DE SUGGESTIONS (INTERACTIF) ---
+class SuggestionView(discord.ui.View):
+    def __init__(self, user_id, titre):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        self.titre = titre
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        role = interaction.guild.get_role(ROLE_MODO_ID)
+        if role in interaction.user.roles or interaction.user.guild_permissions.administrator:
+            return True
+        await interaction.response.send_message("❌ Seuls les modérateurs peuvent faire cela.", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Accepter", style=discord.ButtonStyle.success, emoji="✅")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = await bot.fetch_user(self.user_id)
+        try:
+            await user.send(f"✅ Ta suggestion pour **{self.titre}** a été acceptée ! Elle sera bientôt disponible.")
+        except: pass
+        await interaction.response.edit_message(content=f"✅ Suggestion acceptée par {interaction.user.mention} pour {self.titre}", view=None)
+
+    @discord.ui.button(label="Refuser", style=discord.ButtonStyle.danger, emoji="❌")
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RejectReasonModal(self.user_id, self.titre))
+
+class RejectReasonModal(discord.ui.Modal, title="Raison du refus"):
+    raison = discord.ui.TextInput(label="Pourquoi refuser ?", placeholder="Ex: Déjà présent, Introuvable...")
+    def __init__(self, user_id, titre):
+        super().__init__()
+        self.user_id, self.titre = user_id, titre
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user = await bot.fetch_user(self.user_id)
+        try:
+            await user.send(f"❌ Ta suggestion pour **{self.titre}** a été refusée.\n**Raison :** {self.raison.value}")
+        except: pass
+        await interaction.response.edit_message(content=f"❌ Refusé par {interaction.user.mention} : {self.raison.value}", view=None)
+
+# --- NAVIGATION SÉRIES ---
+class EpisodeSelect(discord.ui.Select):
+    def __init__(self, serie_id, s_num, episodes):
+        options = [discord.SelectOption(label=f"E{e['episode_number']} - {e['name'][:50]}", value=f"{serie_id}|{s_num}|{e['episode_number']}") for e in episodes[:25]]
+        super().__init__(placeholder="Choisissez l'épisode...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        s_id, s_num, e_num = self.values[0].split('|')
+        db = load_db()
+        cle = f"{s_id}_S{s_num}_E{e_num}"
+        lien = db.get(cle)
+        
+        view = discord.ui.View()
+        if lien:
+            view.add_item(discord.ui.Button(label="▶️ Regarder", url=lien))
+        else:
+            btn_s = discord.ui.Button(label="Faire une suggestion", style=discord.ButtonStyle.primary)
+            async def s_c(i):
+                chan = bot.get_channel(SUGGESTION_CHANNEL_ID)
+                await chan.send(f"📥 **Suggestion** : Episode {cle} par {i.user.mention}", view=SuggestionView(i.user.id, f"Ep {cle}"))
+                await i.response.send_message("✅ Envoyé au staff !", ephemeral=True)
+            btn_s.callback = s_c
+            view.add_item(btn_s)
+        
+        await interaction.response.send_message(f"Épisode {e_num} :", view=view, ephemeral=True)
+
+class SaisonSelect(discord.ui.Select):
+    def __init__(self, serie_id, saisons):
+        options = [discord.SelectOption(label=f"Saison {s['season_number']}", value=f"{serie_id}|{s['season_number']}") for s in saisons if s['season_number'] > 0]
+        super().__init__(placeholder="Choisissez la saison...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        s_id, s_num = self.values[0].split('|')
+        data = get_tmdb(f"tv/{s_id}/season/{s_num}")
+        view = discord.ui.View().add_item(EpisodeSelect(s_id, s_num, data.get('episodes', [])))
+        await interaction.response.send_message(f"Saison {s_num} :", view=view, ephemeral=True)
+
+# --- RECHERCHE ---
 class SearchModal(discord.ui.Modal, title="🎬 Recherche Pathé"):
-    recherche = discord.ui.TextInput(
-        label="Quel film/série recherchez-vous ?",
-        placeholder="Ex: Avatar, Inception, Breaking Bad...",
-        min_length=2,
-        max_length=50
-    )
+    recherche = discord.ui.TextInput(label="Quel film/série recherchez-vous ?", min_length=2)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
-        resultats = search_tmdb(self.recherche.value)
+        data = get_tmdb(f"search/multi?query={self.recherche.value}")
+        results = data.get('results', [])
         
         options = []
-        for item in resultats:
-            m_type = item.get('media_type')
+        for r in results:
+            m_type = r.get('media_type')
             if m_type in ['movie', 'tv']:
-                titre = item.get('title') or item.get('name')
-                date = item.get('release_date') or item.get('first_air_date') or "????"
-                
-                options.append(discord.SelectOption(
-                    label=titre[:100], 
-                    description=f"[{m_type.upper()}] - Sortie : {date[:4]}", 
-                    value=f"{m_type}|{item['id']}"
-                ))
+                titre = r.get('title') or r.get('name')
+                options.append(discord.SelectOption(label=titre[:100], value=f"{m_type}|{r['id']}"))
 
-        if not options:
-            return await interaction.followup.send(f"❌ Aucun résultat pour '{self.recherche.value}'", ephemeral=True)
+        if not options: return await interaction.followup.send("❌ Aucun résultat.")
 
-        select = discord.ui.Select(placeholder="Choisissez parmi les résultats...", options=options[:25])
-
-        async def select_callback(inter):
-            await inter.response.defer(ephemeral=True)
+        select = discord.ui.Select(placeholder="Choisissez...", options=options[:25])
+        async def sel_callback(inter):
             m_type, m_id = select.values[0].split('|')
-            info = get_details(m_id, m_type)
-            
+            info = get_tmdb(f"{m_type}/{m_id}")
             titre = info.get('title') or info.get('name')
-            synopsis = info.get('overview', 'Aucun résumé disponible.')
-            note = info.get('vote_average', 0)
-            genres = ", ".join([g['name'] for g in info.get('genres', [])])
-            
-            # --- VÉRIFICATION DU LIEN DANS LA DB ---
-            db = load_db()
-            lien_uqload = db.get(str(m_id)) # On cherche si l'ID existe dans ton fichier JSON
-            
-            embed = discord.Embed(
-                title=f"🎬 {titre}",
-                description=f"**Genre :** {genres}\n**Note :** ⭐ {note:.1f}/10\n\n**Résumé :**\n{synopsis}",
-                color=discord.Color.from_rgb(43, 45, 49),
-                timestamp=datetime.datetime.now()
-            )
-            embed.set_footer(text=f"ID TMDB : {m_id}") # Très utile pour savoir quel ID ajouter
-            
-            poster = info.get('poster_path')
-            if poster:
-                embed.set_image(url=f"https://image.tmdb.org/t/p/w500{poster}")
-            
-            view_link = discord.ui.View()
-            
-            if lien_uqload:
-                # Si le lien existe, on met le bouton bleu
-                view_link.add_item(discord.ui.Button(label="▶️ Regarder maintenant", url=lien_uqload, style=discord.ButtonStyle.link))
+            embed = discord.Embed(title=f"🎬 {titre}", description=info.get('overview', '')[:500], color=0x2b2d31)
+            if info.get('poster_path'): embed.set_image(url=f"https://image.tmdb.org/t/p/w500{info['poster_path']}")
+            embed.set_footer(text=f"ID TMDB : {m_id}")
+
+            view = discord.ui.View()
+            if m_type == 'movie':
+                db = load_db()
+                lien = db.get(str(m_id))
+                if lien: view.add_item(discord.ui.Button(label="▶️ Regarder", url=lien))
+                else:
+                    btn_s = discord.ui.Button(label="Faire une suggestion", style=discord.ButtonStyle.primary)
+                    async def s_c(i):
+                        chan = bot.get_channel(SUGGESTION_CHANNEL_ID)
+                        await chan.send(f"📥 **Suggestion** : {titre} par {i.user.mention}", view=SuggestionView(i.user.id, titre))
+                        await i.response.send_message("✅ Envoyé au staff !", ephemeral=True)
+                    btn_s.callback = s_c
+                    view.add_item(btn_s)
             else:
-                # Sinon, bouton gris désactivé
-                view_link.add_item(discord.ui.Button(label="⌛ Bientôt disponible", disabled=True, style=discord.ButtonStyle.secondary))
-            
-            await inter.followup.send(embed=embed, view=view_link, ephemeral=True)
+                view.add_item(SaisonSelect(m_id, info.get('seasons', [])))
 
-        select.callback = select_callback
-        view_select = discord.ui.View()
-        view_select.add_item(select)
-        await interaction.followup.send(f"🔎 Résultats pour **{self.recherche.value}** :", view=view_select, ephemeral=True)
+            await inter.response.send_message(embed=embed, view=view, ephemeral=True)
+        
+        select.callback = sel_callback
+        await interaction.followup.send("Résultats :", view=discord.ui.View().add_item(select), ephemeral=True)
 
-# --- 2. BOUTONS DU CATALOGUE ---
-
+# --- BOUTONS CATALOGUE ---
 class CatalogueButtons(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
+    def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="Rechercher", style=discord.ButtonStyle.success, emoji="🔎")
-    async def search_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(SearchModal())
-
+    async def search(self, interaction, button): await interaction.response.send_modal(SearchModal())
     @discord.ui.button(label="Anti-Pub", style=discord.ButtonStyle.danger, emoji="🚫")
-    async def antipub_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🛡️ Utilisez un bloqueur de pub pour une meilleure expérience.", ephemeral=True)
+    async def anti(self, interaction, button): await interaction.response.send_message("🛡️ Utilisez un bloqueur de pub !", ephemeral=True)
 
-# --- 3. ÉVÉNEMENTS & COMMANDES ---
+# --- COMMANDES ---
+@bot.tree.command(name="ajouter_lien")
+async def add_link(interaction: discord.Interaction, tmdb_id: str, lien: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin uniquement.", ephemeral=True)
+    db = load_db(); db[tmdb_id] = lien; save_db(db)
+    await interaction.response.send_message(f"✅ Lié : {tmdb_id}", ephemeral=True)
 
-# --- COMMANDE CACHÉE POUR AJOUTER LES LIENS ---
-@bot.tree.command(name="ajouter_lien", description="Ajouter un lien Uqload à un film (Admin)")
-async def add_link(interaction: discord.Interaction, tmdb_id: str, lien_uqload: str):
+@bot.tree.command(name="ban", description="Bannir un membre du serveur et du bot")
+async def ban(interaction: discord.Interaction, membre: discord.Member, raison: str = "Banni via le Bot Pathé"):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Vous n'avez pas la permission de bannir.", ephemeral=True)
+    
+    # 1. Ajout à la base de données du bot
     db = load_db()
-    db[tmdb_id] = lien_uqload
+    bans = db.get("banned_users", [])
+    if str(membre.id) not in bans:
+        bans.append(str(membre.id))
+    db["banned_users"] = bans
     save_db(db)
-    await interaction.response.send_message(f"✅ Lien ajouté avec succès pour l'ID {tmdb_id} !", ephemeral=True)
 
-@bot.event
-async def on_ready():
-    print(f"✅ Bot connecté en tant que {bot.user}")
-    await bot.tree.sync()
+    # 2. Bannissement du serveur Discord
+    try:
+        await membre.ban(reason=raison)
+        await interaction.response.send_message(f"🚫 **{membre.name}** a été banni du serveur et ajouté à la liste noire du bot.\nRaison : {raison}")
+    except Exception as e:
+        await interaction.response.send_message(f"⚠️ Le membre a été ajouté à la liste noire, mais je n'ai pas pu le bannir du serveur (Vérifiez mes permissions).\nErreur : {e}", ephemeral=True)
 
-@bot.tree.command(name="catalogue", description="Ouvrir le moteur de recherche Pathé")
+@bot.tree.command(name="catalogue")
 async def catalogue(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="✨ PATHÉ STREAMING",
-        description="Cherchez parmi plus de **90,000** titres via notre moteur intelligent.\n\n"
-                    "Cliquez sur **Rechercher** ci-dessous.",
-        color=discord.Color.from_rgb(43, 45, 49)
-    )
+    if is_banned(interaction.user.id): return await interaction.response.send_message("❌ Vous êtes banni.", ephemeral=True)
+    embed = discord.Embed(title="✨ PATHÉ STREAMING", description="Cherchez parmi 90,000 titres.", color=0x2b2d31)
     embed.set_image(url="https://media.discordapp.net/attachments/1453864717897699379/1454074612815102148/Pathe_Logo.svg.png")
     await interaction.response.send_message(embed=embed, view=CatalogueButtons())
 
-# --- LANCEMENT ---
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"✅ {bot.user} prêt.")
+
 keep_alive()
 bot.run(os.getenv('DISCORD_TOKEN'))
