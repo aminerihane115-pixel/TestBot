@@ -14,7 +14,7 @@ bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 DB_FILE = "db_links.json"
 
-# Tes IDs fournis
+# TES IDs (Ne pas toucher)
 SUGGESTION_CHANNEL_ID = 1453864717897699382
 ROLE_MODO_ID = 1453864714915287102
 
@@ -33,6 +33,7 @@ def is_banned(user_id):
     return str(user_id) in db.get("banned_users", [])
 
 def get_tmdb(endpoint):
+    """Fonction unique pour parler à TMDB"""
     url = f"https://api.themoviedb.org/3/{endpoint}?api_key={TMDB_API_KEY}&language=fr-FR"
     return requests.get(url).json()
 
@@ -89,7 +90,7 @@ class EpisodeSelect(discord.ui.Select):
         
         view = discord.ui.View()
         if lien:
-            view.add_item(discord.ui.Button(label="▶️ Regarder", url=lien))
+            view.add_item(discord.ui.Button(label="▶️ Regarder", url=lien, style=discord.ButtonStyle.link))
         else:
             btn_s = discord.ui.Button(label="Faire une suggestion", style=discord.ButtonStyle.primary)
             async def s_c(i):
@@ -126,7 +127,8 @@ class SearchModal(discord.ui.Modal, title="🎬 Recherche Pathé"):
             m_type = r.get('media_type')
             if m_type in ['movie', 'tv']:
                 titre = r.get('title') or r.get('name')
-                options.append(discord.SelectOption(label=titre[:100], value=f"{m_type}|{r['id']}"))
+                date = r.get('release_date') or r.get('first_air_date') or "????"
+                options.append(discord.SelectOption(label=titre[:100], description=f"{date[:4]}", value=f"{m_type}|{r['id']}"))
 
         if not options: return await interaction.followup.send("❌ Aucun résultat.")
 
@@ -143,7 +145,7 @@ class SearchModal(discord.ui.Modal, title="🎬 Recherche Pathé"):
             if m_type == 'movie':
                 db = load_db()
                 lien = db.get(str(m_id))
-                if lien: view.add_item(discord.ui.Button(label="▶️ Regarder", url=lien))
+                if lien: view.add_item(discord.ui.Button(label="▶️ Regarder", url=lien, style=discord.ButtonStyle.link))
                 else:
                     btn_s = discord.ui.Button(label="Faire une suggestion", style=discord.ButtonStyle.primary)
                     async def s_c(i):
@@ -169,34 +171,59 @@ class CatalogueButtons(discord.ui.View):
     async def anti(self, interaction, button): await interaction.response.send_message("🛡️ Utilisez un bloqueur de pub !", ephemeral=True)
 
 # --- COMMANDES ---
-@bot.tree.command(name="ajouter_lien")
+
+@bot.tree.command(name="ajouter_lien", description="Admin: Lier un ID TMDB à un lien")
 async def add_link(interaction: discord.Interaction, tmdb_id: str, lien: str):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin uniquement.", ephemeral=True)
     db = load_db(); db[tmdb_id] = lien; save_db(db)
     await interaction.response.send_message(f"✅ Lié : {tmdb_id}", ephemeral=True)
 
-@bot.tree.command(name="ban", description="Bannir un membre du serveur et du bot")
+@bot.tree.command(name="ban", description="Bannir du serveur + Blacklist Bot")
 async def ban(interaction: discord.Interaction, membre: discord.Member, raison: str = "Banni via le Bot Pathé"):
     if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Vous n'avez pas la permission de bannir.", ephemeral=True)
+        return await interaction.response.send_message("❌ Pas la permission.", ephemeral=True)
     
-    # 1. Ajout à la base de données du bot
+    # 1. Blacklist Bot
     db = load_db()
     bans = db.get("banned_users", [])
-    if str(membre.id) not in bans:
-        bans.append(str(membre.id))
-    db["banned_users"] = bans
-    save_db(db)
+    if str(membre.id) not in bans: bans.append(str(membre.id))
+    db["banned_users"] = bans; save_db(db)
 
-    # 2. Bannissement du serveur Discord
+    # 2. Ban Serveur
     try:
         await membre.ban(reason=raison)
-        await interaction.response.send_message(f"🚫 **{membre.name}** a été banni du serveur et ajouté à la liste noire du bot.\nRaison : {raison}")
+        await interaction.response.send_message(f"🚫 **{membre.name}** banni du serveur et du bot.")
     except Exception as e:
-        await interaction.response.send_message(f"⚠️ Le membre a été ajouté à la liste noire, mais je n'ai pas pu le bannir du serveur (Vérifiez mes permissions).\nErreur : {e}", ephemeral=True)
+        await interaction.response.send_message(f"⚠️ Blacklisté du bot, mais erreur ban serveur : {e}", ephemeral=True)
 
-@bot.tree.command(name="catalogue")
+@bot.tree.command(name="unban", description="Débannir du serveur + Enlever Blacklist")
+async def unban(interaction: discord.Interaction, user_id: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Pas la permission.", ephemeral=True)
+
+    # 1. Enlever Blacklist Bot
+    db = load_db()
+    bans = db.get("banned_users", [])
+    if user_id in bans:
+        bans.remove(user_id)
+        db["banned_users"] = bans
+        save_db(db)
+        msg_bot = "✅ Retiré de la blacklist du bot."
+    else:
+        msg_bot = "ℹ️ N'était pas dans la blacklist du bot."
+
+    # 2. Deban Serveur
+    try:
+        user_obj = discord.Object(id=int(user_id))
+        await interaction.guild.unban(user_obj)
+        msg_discord = "✅ Débanni du serveur Discord."
+    except Exception as e:
+        msg_discord = f"⚠️ Erreur débannissement serveur (Peut-être déjà débanni ou ID invalide)."
+
+    await interaction.response.send_message(f"{msg_bot}\n{msg_discord}")
+
+@bot.tree.command(name="catalogue", description="Ouvrir le catalogue")
 async def catalogue(interaction: discord.Interaction):
     if is_banned(interaction.user.id): return await interaction.response.send_message("❌ Vous êtes banni.", ephemeral=True)
     embed = discord.Embed(title="✨ PATHÉ STREAMING", description="Cherchez parmi 90,000 titres.", color=0x2b2d31)
