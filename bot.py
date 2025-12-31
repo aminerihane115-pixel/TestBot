@@ -99,7 +99,6 @@ class EpisodeSelect(discord.ui.Select):
         if lien:
             view.add_item(discord.ui.Button(label="▶️ Regarder", url=lien, style=discord.ButtonStyle.link))
         else:
-            # AJOUT : Bouton Bientôt disponible + Bouton Suggestion
             view.add_item(discord.ui.Button(label="⌛ Bientôt disponible", disabled=True, style=discord.ButtonStyle.secondary))
             btn = discord.ui.Button(label="Faire une suggestion", style=discord.ButtonStyle.primary)
             async def suggest_callback(i):
@@ -160,7 +159,6 @@ class SearchModal(discord.ui.Modal, title="🎬 Recherche Pathé"):
                 if lien:
                     view.add_item(discord.ui.Button(label="▶️ Regarder le film", url=lien, style=discord.ButtonStyle.link))
                 else:
-                    # AJOUT : Bouton Bientôt disponible + Bouton Suggestion pour FILMS
                     view.add_item(discord.ui.Button(label="⌛ Bientôt disponible", disabled=True, style=discord.ButtonStyle.secondary))
                     btn_s = discord.ui.Button(label="Faire une suggestion", style=discord.ButtonStyle.primary)
                     async def suggest_callback(i):
@@ -186,6 +184,15 @@ class CatalogueButtons(discord.ui.View):
     async def anti(self, interaction, button): await interaction.response.send_message("🛡️ Installez uBlock Origin !", ephemeral=True)
 
 # --- COMMANDES ---
+
+@bot.tree.command(name="export_db", description="Admin : Récupérer le fichier db_links.json")
+async def export_db(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator: return
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "rb") as f:
+            await interaction.response.send_message("📁 Voici la base de données actuelle (à mettre dans VS Code) :", file=discord.File(f, "db_links.json"), ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Aucun fichier trouvé.", ephemeral=True)
 
 @bot.tree.command(name="ajouter_lien", description="Admin : Lier un film/épisode")
 async def add_link(interaction: discord.Interaction, tmdb_id: str, lien: str):
