@@ -12,7 +12,7 @@ load_dotenv()
 # --- CONFIGURATION ---
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
-DB_FILE = "db_links.json"
+DB_FILE = "/data/db_links.json"
 
 # TES IDs
 SUGGESTION_CHANNEL_ID = 1453864717897699382
