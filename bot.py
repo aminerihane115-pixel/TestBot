@@ -14,9 +14,8 @@ TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 DB_FILE = "db_links.json"
 
 SUGGESTION_CHANNEL_ID = 1453864717897699382
-ROLE_MODO_ID = 1453864714915287102
 
-# Ta liste d'emojis pour les boutons de recherche
+# Liste d'emojis pour les boutons
 EMOJI_LIST = ["🧡", "💛", "💚", "💙", "🤍", "🟠", "🟣", "⚫", "❤️"]
 
 # --- GESTION DB ---
@@ -48,7 +47,7 @@ def get_details(endpoint):
 # --- VUES ---
 
 class ResultView(discord.ui.View):
-    """Vue qui génère les boutons emojis (cœurs) sous la liste de recherche"""
+    """Vue des boutons emojis sous la recherche"""
     def __init__(self, results):
         super().__init__(timeout=180)
         for i, res in enumerate(results[:len(EMOJI_LIST)]):
@@ -85,22 +84,27 @@ class EmojiButton(discord.ui.Button):
                 btn_sug.callback = sug_cb
                 view.add_item(btn_sug)
         else:
+            # Pour les séries : On crée le menu déroulant des saisons
             options = [discord.SelectOption(label=f"Saison {s['season_number']}", value=f"{m_id}|{s['season_number']}") 
                        for s in info.get('seasons', []) if s['season_number'] > 0]
             if options:
                 select = discord.ui.Select(placeholder="Choisissez une saison...", options=options[:25])
-                select.callback = lambda i: self.show_episodes(i, select.values[0])
+                # Ici on utilise edit_message pour transformer le message actuel
+                select.callback = lambda i: self.show_episodes(i, select.values[0], info)
                 view.add_item(select)
 
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        # On modifie le message de recherche au lieu d'en envoyer un nouveau
+        await interaction.response.edit_message(content=None, embed=embed, view=view)
 
-    async def show_episodes(self, interaction, value):
+    async def show_episodes(self, interaction, value, info_serie):
         sid, snum = value.split('|')
         data = get_details(f"tv/{sid}/season/{snum}")
         db = load_db()
         
+        # Titre et Poster de la saison
         text = f"🟦 **Saison {snum}**\n\n"
         ep_options = []
+        
         for e in data.get('episodes', []):
             cle = f"{sid}_S{snum}_E{e['episode_number']}"
             statut = "✅" if cle in db["links"] else "❌"
@@ -117,11 +121,23 @@ class EmojiButton(discord.ui.Button):
             ep_sel.callback = ep_cb
             view.add_item(ep_sel)
         
-        btn_back = discord.ui.Button(label="Retour", style=discord.ButtonStyle.danger, emoji="⬅️")
-        btn_back.callback = lambda i: i.response.send_message("Veuillez relancer la saison pour revenir.", ephemeral=True)
+        # Bouton Retour (pour revenir au choix des saisons)
+        btn_back = discord.ui.Button(label="Retour aux saisons", style=discord.ButtonStyle.danger, emoji="⬅️")
+        async def back_cb(i):
+            # On recrée la vue de la série (re-déclenche le callback de EmojiButton logic)
+            await self.callback(i)
+        btn_back.callback = back_cb
         view.add_item(btn_back)
 
-        await interaction.response.send_message(text, view=view, ephemeral=True)
+        # Création de l'embed pour l'image de la saison
+        embed = discord.Embed(color=0x2b2d31)
+        if data.get('poster_path'):
+            embed.set_image(url=f"https://image.tmdb.org/t/p/w500{data['poster_path']}")
+        elif info_serie.get('poster_path'):
+            embed.set_image(url=f"https://image.tmdb.org/t/p/w500{info_serie['poster_path']}")
+
+        # Transformation du message en liste d'épisodes
+        await interaction.response.edit_message(content=text, embed=embed, view=view)
 
 class FavButton(discord.ui.Button):
     def __init__(self, m_id, titre):
@@ -140,7 +156,7 @@ class FavButton(discord.ui.Button):
         
         db["favorites"][uid].append({"id": self.m_id, "titre": self.titre})
         save_db(db)
-        await interaction.response.send_message(f"❤️ **{self.titre}** ajouté aux favoris !", ephemeral=True)
+        await interaction.response.send_message(f"❤️ **{self.titre}** ajouté !", ephemeral=True)
 
 class SuggestionView(discord.ui.View):
     def __init__(self, user_id, titre):
@@ -198,11 +214,12 @@ class SearchModal(discord.ui.Modal, title="🎬 Recherche Pathé"):
             titre = r.get('title') or r.get('name')
             text += f"{EMOJI_LIST[i]} {titre}\n"
         
+        # Message ephémère qui va être transformé par la suite
         await interaction.response.send_message(text, view=ResultView(valid), ephemeral=True)
 
-# --- ADMIN ---
+# --- ADMIN COMMANDS ---
 
-@bot.tree.command(name="ajouter_saison", description="Ajouter une saison entière (collez plusieurs liens)")
+@bot.tree.command(name="ajouter_saison", description="Ajouter une saison entière")
 async def add_season(interaction: discord.Interaction, tmdb_id: str, saison: int, liens: str):
     if not interaction.user.guild_permissions.administrator: return
     liste_liens = liens.replace(',', ' ').split()
@@ -220,24 +237,10 @@ async def add_link(interaction: discord.Interaction, tmdb_id: str, lien: str):
     save_db(db)
     await interaction.response.send_message(f"✅ Lien sauvegardé pour `{tmdb_id}`", ephemeral=True)
 
-@bot.tree.command(name="ban")
-async def ban(interaction: discord.Interaction, membre: discord.Member):
-    if not interaction.user.guild_permissions.administrator: return
-    db = load_db()
-    if str(membre.id) not in db["banned_users"]: db["banned_users"].append(str(membre.id))
-    save_db(db)
-    await interaction.response.send_message(f"🚫 {membre.name} banni du catalogue.")
-
-@bot.tree.command(name="export_db")
-async def export_db(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator: return
-    with open(DB_FILE, "rb") as f:
-        await interaction.response.send_message(file=discord.File(f, "database.json"), ephemeral=True)
-
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    print(f"✅ Bot connecté : {bot.user}")
+    print(f"✅ Bot prêt : {bot.user}")
 
 keep_alive()
 bot.run(os.getenv('DISCORD_TOKEN'))
