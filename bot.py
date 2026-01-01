@@ -21,13 +21,14 @@ EMOJI_LIST = ["🧡", "💛", "💚", "💙", "🤍", "🟠", "🟣", "⚫", "�
 # --- GESTION DB ---
 def load_db():
     if not os.path.exists(DB_FILE): 
-        return {"links": {}, "favorites": {}, "banned_users": []}
+        return {"links": {}, "trailers": {}, "favorites": {}, "banned_users": []}
     with open(DB_FILE, "r", encoding='utf-8') as f:
         try: 
             data = json.load(f)
-            if "links" not in data: data = {"links": data, "favorites": {}, "banned_users": []}
+            if "links" not in data: data = {"links": data, "trailers": {}, "favorites": {}, "banned_users": []}
+            if "trailers" not in data: data["trailers"] = {}
             return data
-        except: return {"links": {}, "favorites": {}, "banned_users": []}
+        except: return {"links": {}, "trailers": {}, "favorites": {}, "banned_users": []}
 
 def save_db(db):
     with open(DB_FILE, "w", encoding='utf-8') as f: 
@@ -88,29 +89,56 @@ class EmojiButton(discord.ui.Button):
         titre = info.get('title') or info.get('name')
         
         if m_type == "movie":
-            # FILM
+            # FILM - Affichage complet comme sur l'image
             embed = discord.Embed(title=titre, color=0x2b2d31)
-            embed.add_field(name="Synopsis", value=info.get('overview', 'Non spécifié')[:500], inline=False)
+            
+            # Genres
+            genres = ", ".join([g['name'] for g in info.get('genres', [])])
+            embed.add_field(name="Genres:", value=genres or "Non spécifié", inline=False)
+            
+            # Date de sortie
+            date_sortie = info.get('release_date', 'Inconnue')[:4]
+            embed.add_field(name="Date de sortie:", value=date_sortie, inline=False)
+            
+            # Synopsis
+            embed.add_field(name="Synopsis:", value=info.get('overview', 'Non spécifié')[:500], inline=False)
+            
+            # Poster
             if info.get('poster_path'):
                 embed.set_image(url=f"https://image.tmdb.org/t/p/w500{info['poster_path']}")
             
             view = discord.ui.View()
             
-            # Bouton Retour
-            btn_back = discord.ui.Button(emoji="⬅️", style=discord.ButtonStyle.secondary, row=0)
+            # Bouton Retour (flèche bleue)
+            btn_back = discord.ui.Button(emoji="⬅️", style=discord.ButtonStyle.primary, row=0)
             async def back_cb(i):
                 await self.show_search_results(i)
             btn_back.callback = back_cb
             view.add_item(btn_back)
             
-            # Vérifier si lien existe
+            # Boutons Lecture et Bande d'annonce
             db = load_db()
             lien = db["links"].get(str(m_id))
+            trailer = db["trailers"].get(str(m_id))
+            
             if lien:
-                view.add_item(discord.ui.Button(label="Regarder", url=lien, style=discord.ButtonStyle.link, row=0))
+                view.add_item(discord.ui.Button(label="Lecture", emoji="🔗", url=lien, style=discord.ButtonStyle.link, row=1))
+            
+            if trailer:
+                view.add_item(discord.ui.Button(label="Bande d'annonce", emoji="🔗", url=trailer, style=discord.ButtonStyle.link, row=1))
+            
+            # Bouton Signaler un lien (rouge)
+            btn_report = discord.ui.Button(label="Signaler un lien", emoji="🚩", style=discord.ButtonStyle.danger, row=2)
+            async def report_cb(i):
+                chan = bot.get_channel(SUGGESTION_CHANNEL_ID)
+                if chan:
+                    await chan.send(f"🚩 **Signalement** : {titre} (ID: {m_id})")
+                await i.response.send_message("✅ Merci, le staff va vérifier !", ephemeral=True)
+            btn_report.callback = report_cb
+            view.add_item(btn_report)
             
             # Bouton Favoris
-            view.add_item(FavButton(m_id, titre, row=0))
+            view.add_item(FavButton(m_id, titre, row=2))
             
             await interaction.response.edit_message(content=None, embed=embed, view=view)
             
@@ -156,7 +184,7 @@ class EmojiButton(discord.ui.Button):
         # Episodes en liens bleus cliquables
         db = load_db()
         episodes_text = "**Épisodes:**\n"
-        for e in season_data.get('episodes', [])[:7]:  # Limiter à 7 comme sur l'image
+        for e in season_data.get('episodes', []):
             cle = f"{sid}_S1_E{e['episode_number']}"
             lien = db["links"].get(cle)
             if lien:
@@ -340,8 +368,48 @@ class SearchModal(discord.ui.Modal, title="🎬 Recherche"):
         
         await interaction.response.send_message(embed=embed, view=ResultView(valid, self.recherche.value), ephemeral=True)
 
-@bot.tree.command(name="ajouter_saison")
+@bot.tree.command(name="ajouter_film", description="Ajouter un film avec ses liens")
+async def add_film(interaction: discord.Interaction, tmdb_id: str, lien_lecture: str, lien_bande_annonce: str = None):
+    """
+    Ajoute un film avec son lien de lecture et optionnellement sa bande-annonce
+    
+    Paramètres:
+    - tmdb_id: L'ID TMDB du film (ex: "19995" pour Avatar)
+    - lien_lecture: Le lien pour regarder le film
+    - lien_bande_annonce: (Optionnel) Le lien de la bande-annonce
+    """
+    if not interaction.user.guild_permissions.administrator: 
+        return await interaction.response.send_message("❌ Réservé aux admins.", ephemeral=True)
+    
+    db = load_db()
+    
+    # Ajouter le lien de lecture
+    db["links"][tmdb_id] = lien_lecture
+    
+    # Ajouter la bande-annonce si fournie
+    if lien_bande_annonce:
+        db["trailers"][tmdb_id] = lien_bande_annonce
+    
+    save_db(db)
+    
+    msg = f"✅ Film ajouté (ID: {tmdb_id})\n📺 Lien de lecture ajouté"
+    if lien_bande_annonce:
+        msg += "\n🎬 Bande-annonce ajoutée"
+    
+    await interaction.response.send_message(msg, ephemeral=True)
+
+@bot.tree.command(name="ajouter_saison", description="Ajouter une saison complète d'une série")
 async def add_season(interaction: discord.Interaction, tmdb_id: str, saison: int, liens: str):
+    """
+    Ajoute tous les épisodes d'une saison
+    
+    Paramètres:
+    - tmdb_id: L'ID TMDB de la série
+    - saison: Numéro de la saison (ex: 1)
+    - liens: Liste des liens séparés par des espaces ou virgules
+    
+    Exemple: /ajouter_saison tmdb_id:1396 saison:1 liens:https://lien1.com https://lien2.com
+    """
     if not interaction.user.guild_permissions.administrator: 
         return await interaction.response.send_message("❌ Réservé aux admins.", ephemeral=True)
     
