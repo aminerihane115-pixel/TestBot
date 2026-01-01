@@ -107,6 +107,9 @@ class EmojiButton(discord.ui.Button):
             if info.get('poster_path'):
                 embed.set_image(url=f"https://image.tmdb.org/t/p/w500{info['poster_path']}")
             
+            # Afficher l'ID TMDB sous l'image
+            embed.set_footer(text=f"ID TMDB: {m_id}")
+            
             view = discord.ui.View()
             
             # Bouton Retour (flèche bleue)
@@ -197,6 +200,9 @@ class EmojiButton(discord.ui.Button):
         if season_data.get('poster_path'):
             embed.set_image(url=f"https://image.tmdb.org/t/p/w500{season_data['poster_path']}")
         
+        # Afficher l'ID TMDB sous l'image
+        embed.set_footer(text=f"ID TMDB: {sid}")
+        
         view = discord.ui.View()
         
         # Bouton Retour (flèche bleue)
@@ -262,6 +268,9 @@ class EmojiButton(discord.ui.Button):
         
         if season_data.get('poster_path'):
             embed.set_image(url=f"https://image.tmdb.org/t/p/w500{season_data['poster_path']}")
+        
+        # Afficher l'ID TMDB sous l'image
+        embed.set_footer(text=f"ID TMDB: {sid}")
         
         view = discord.ui.View()
         
